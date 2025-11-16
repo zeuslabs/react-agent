@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Dict, List, Literal, cast
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode
@@ -16,12 +17,62 @@ from react_agent.configuration import Configuration
 from react_agent.state import InputState, State
 from react_agent.tools import TOOLS
 
-from langchain_core.runnables import RunnableConfig
+
+def get_llm(configuration: Configuration):
+    """
+    Get the appropriate LLM based on configuration.
+
+    Args:
+        configuration: Configuration object containing LLM settings
+
+    Returns:
+        Configured LLM instance (ChatOpenAI or ChatBedrock)
+    """
+    print(configuration.llm_provider)
+    if configuration.llm_provider == "bedrock":
+        try:
+            from langchain_aws import ChatBedrock
+        except ImportError:
+            raise ImportError(
+                "langchain-aws is required for Bedrock support. "
+                "Install it with: pip install langchain-aws boto3"
+            )
+
+        # Bedrock LLM 초기화
+        bedrock_kwargs = {
+            "model_id": configuration.bedrock_model_id,
+            "region_name": configuration.aws_region,
+            "model_kwargs": {
+                "temperature": configuration.temperature,
+                "max_tokens": configuration.max_tokens,
+            },
+        }
+
+        # AWS Profile이 설정된 경우 추가
+        if configuration.aws_profile:
+            bedrock_kwargs["credentials_profile_name"] = configuration.aws_profile
+
+        return ChatBedrock(**bedrock_kwargs)
+
+    elif configuration.llm_provider == "openai":
+        # OpenAI LLM 초기화
+        return ChatOpenAI(
+            model=configuration.model,
+            temperature=configuration.temperature,
+            max_tokens=configuration.max_tokens,
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported LLM provider: {configuration.llm_provider}. "
+            "Supported providers: 'openai', 'bedrock'"
+        )
+
 
 # Define the function that calls the model
-
-
-async def call_model(state: State, config: RunnableConfig) -> Dict[str, List[AIMessage]]:
+async def call_model(
+    state: State, config: RunnableConfig
+) -> Dict[str, List[AIMessage]]:
     """Call the LLM powering our "agent".
 
     This function prepares the prompt, initializes the model, and processes the response.
@@ -35,12 +86,10 @@ async def call_model(state: State, config: RunnableConfig) -> Dict[str, List[AIM
     """
     configuration = Configuration.from_runnable_config(config)
 
-    # Initialize the model with tool binding. Change the model or add more tools here.
-    # ChatOpenAI 객체 생성 (OpenRouter 사용)
-    llm = ChatOpenAI(
-        temperature=0.1,
-        model=configuration.model,
-    )
+    # Get the appropriate LLM based on configuration
+    llm = get_llm(configuration)
+
+    # Bind tools to the model
     model = llm.bind_tools(TOOLS)
 
     # Format the system prompt. Customize this to change the agent's behavior.
